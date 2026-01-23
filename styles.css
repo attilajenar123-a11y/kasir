@@ -131,3 +131,6 @@ body{
 .topbar { position: sticky; top: 0; z-index: 9999; }
 .tabs { position: relative; z-index: 10000; }
 .tab { position: relative; z-index: 10001; pointer-events: auto; }
+
+.modal.hidden { display: none !important; pointer-events: none !important; }
+.modal { pointer-events: auto; }

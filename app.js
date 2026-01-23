@@ -366,9 +366,16 @@ function renderAll(){
 elSearch.addEventListener('input', renderProducts);
 elCheckout.addEventListener('click', checkout);
 
-tabKasir.addEventListener('click', openKasir);
-tabRiwayat.addEventListener('click', openRiwayat);
-tabGame.addEventListener('click', openGame);
+// Tab navigation (lebih kebal: event delegation)
+document.querySelector('.tabs')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('button.tab');
+  if (!btn) return;
+
+  if (btn.id === 'tab-kasir') openKasir();
+  if (btn.id === 'tab-riwayat') openRiwayat();
+  if (btn.id === 'tab-game') openGame();
+});
+
 
 elExport.addEventListener('click', exportJSON);
 elReset.addEventListener('click', resetAll);

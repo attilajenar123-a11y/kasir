@@ -1,140 +1,90 @@
-<!doctype html>
-<html lang="id">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Kasir Offline</title>
-  <meta name="theme-color" content="#111827" />
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" href="icon-192.png">
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo">🧾</div>
-        <div>
-          <div class="title">Kasir Offline</div>
-          <div class="subtitle">1 HP • data tersimpan lokal</div>
-        </div>
-      </div>
+/* Kasir Offline + Game "SAYANG"
+   - Data tersimpan lokal (localStorage)
+   - Tab navigation kebal (event delegation)
+   - Kasir: produk, edit harga, cart, checkout
+   - Riwayat: list transaksi + modal detail + export JSON
+   - Game: meter suara (dB), deteksi kata SAYANG (kalau browser support), manual button fallback
+*/
 
-      <nav class="tabs" role="tablist" aria-label="Navigasi">
-        <button class="tab active" id="tab-kasir" role="tab" aria-selected="true">Kasir</button>
-        <button class="tab" id="tab-riwayat" role="tab" aria-selected="false">Riwayat</button>
-        <button class="tab" id="tab-game" role="tab" aria-selected="false">Game</button>
-      </nav>
-    </header>
+(() => {
+  // -----------------------------
+  // Utils
+  // -----------------------------
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-    <main class="main">
-      <section id="view-kasir" class="view">
-        <div class="toolbar">
-          <input id="search" class="search" placeholder="Cari menu…" autocomplete="off" />
-          <button id="btn-reset" class="btn ghost" title="Reset data (produk, keranjang, riwayat)">Reset</button>
-        </div>
+  const fmtIDR = (n) => {
+    const v = Number(n || 0);
+    return "Rp " + v.toLocaleString("id-ID");
+  };
 
-        <div id="products" class="grid" aria-live="polite"></div>
+  const nowISO = () => new Date().toISOString();
+  const toLocalTime = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" });
+  };
 
-        <div class="bottom">
-          <div class="summary">
-            <div class="sum-line"><span>Item</span><strong id="sum-items">0</strong></div>
-            <div class="sum-line"><span>Sub total</span><strong id="sum-total">Rp 0</strong></div>
-          </div>
-          <button id="btn-checkout" class="btn primary" disabled>Checkout</button>
-        </div>
-      </section>
+  const uid = () => Math.random().toString(16).slice(2, 8).toUpperCase();
 
-      <section id="view-riwayat" class="view hidden">
-        <div class="toolbar">
-          <div class="hint">Tap transaksi untuk lihat detail.</div>
-          <button id="btn-export" class="btn">Export JSON</button>
-        </div>
-
-        <div id="tx-empty" class="empty hidden">
-          <div class="empty-icon">📭</div>
-          <div class="empty-title">Belum ada transaksi</div>
-          <div class="empty-sub">Mulai dari tab Kasir, lalu Checkout.</div>
-        </div>
-
-        <div id="transactions" class="list" aria-live="polite"></div>
-      </section>
-
-      <section id="view-game" class="view hidden">
-        <div class="toolbar">
-          <div class="hint">Teriak kata <strong>SAYANG</strong> 🔊</div>
-          <button id="btn-game-reset" class="btn">Reset Skor</button>
-        </div>
-
-        <div class="card game">
-          <div class="game-head">
-            <div>
-              <div class="game-title">Keras-kerasan “SAYANG”</div>
-              <div class="game-sub">Parameter naik sesuai suara kamu. Target: setinggi mungkin!</div>
-            </div>
-            <span class="badge" id="game-status">Belum mulai</span>
-          </div>
-
-          <div class="meter-wrap">
-            <div class="meter"><div id="meter-fill" class="meter-fill" style="width:0%"></div></div>
-            <div class="meter-meta">
-              <div><span class="small">dB</span> <strong id="db-now">-∞</strong></div>
-              <div><span class="small">Peak</span> <strong id="db-peak">-∞</strong></div>
-            </div>
-          </div>
-
-          <div class="game-row">
-            <button id="btn-game-start" class="btn primary">Mulai</button>
-            <button id="btn-game-stop" class="btn" disabled>Stop</button>
-            <button id="btn-manual-sayang" class="btn ghost" disabled title="Kalau deteksi kata tidak tersedia, tap ini setelah kamu bilang SAYANG">Aku udah bilang SAYANG</button>
-          </div>
-
-          <div class="game-info">
-            <div class="small">Catatan:</div>
-            <ul>
-              <li>Web harus lewat <strong>HTTPS</strong> biar mic bisa jalan (GitHub Pages aman).</li>
-              <li>Deteksi kata “SAYANG” pakai fitur browser. Kalau nggak support, pakai tombol manual.</li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="game-title">Skor Tertinggi</div>
-          <div class="small">Top 10 dari HP ini</div>
-          <div id="scores" class="list" style="margin-top:10px"></div>
-          <div id="scores-empty" class="empty hidden">
-            <div class="empty-icon">🏁</div>
-            <div class="empty-title">Belum ada skor</div>
-            <div class="empty-sub">Klik Mulai, lalu teriak “SAYANG”.</div>
-          </div>
-        </div>
-      </section>
-    </main>
-
-    <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-      <div class="modal-backdrop" id="modal-close"></div>
-      <div class="modal-card">
-        <div class="modal-head">
-          <div>
-            <div id="modal-title" class="modal-title">Detail Transaksi</div>
-            <div id="modal-sub" class="modal-sub"></div>
-          </div>
-          <button class="btn ghost" id="modal-x">Tutup</button>
-        </div>
-        <div id="modal-body" class="modal-body"></div>
-      </div>
-    </div>
-
-    <div id="toast" class="toast hidden"></div>
-  </div>
-
-  <script src="app.js"></script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(() => {});
-      });
+  const storage = {
+    get(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch {
+        return fallback;
+      }
+    },
+    set(key, val) {
+      localStorage.setItem(key, JSON.stringify(val));
+    },
+    del(key) {
+      localStorage.removeItem(key);
     }
-  </script>
-</body>
-</html>
+  };
+
+  // -----------------------------
+  // Keys
+  // -----------------------------
+  const K_PRODUCTS = "kasir.products.v1";
+  const K_CART = "kasir.cart.v1";
+  const K_TX = "kasir.transactions.v1";
+  const K_SCORES = "kasir.game.scores.v1";
+
+  // -----------------------------
+  // Elements
+  // -----------------------------
+  const el = {
+    tabs: $(".tabs"),
+    viewKasir: $("#view-kasir"),
+    viewRiwayat: $("#view-riwayat"),
+    viewGame: $("#view-game"),
+
+    tabKasir: $("#tab-kasir"),
+    tabRiwayat: $("#tab-riwayat"),
+    tabGame: $("#tab-game"),
+
+    search: $("#search"),
+    btnReset: $("#btn-reset"),
+    products: $("#products"),
+
+    sumItems: $("#sum-items"),
+    sumTotal: $("#sum-total"),
+    btnCheckout: $("#btn-checkout"),
+
+    btnExport: $("#btn-export"),
+    txEmpty: $("#tx-empty"),
+    transactions: $("#transactions"),
+
+    modal: $("#modal"),
+    modalCloseBackdrop: $("#modal-close"),
+    modalX: $("#modal-x"),
+    modalSub: $("#modal-sub"),
+    modalBody: $("#modal-body"),
+    modalTitle: $("#modal-title"),
+
+    toast: $("#toast"),
+
+    // Game
+    btnGameReset: $("#btn-game-reset"),
+    bt

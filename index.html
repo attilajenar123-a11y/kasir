@@ -23,11 +23,11 @@
       <nav class="tabs" role="tablist" aria-label="Navigasi">
         <button class="tab active" id="tab-kasir" role="tab" aria-selected="true">Kasir</button>
         <button class="tab" id="tab-riwayat" role="tab" aria-selected="false">Riwayat</button>
+        <button class="tab" id="tab-game" role="tab" aria-selected="false">Game</button>
       </nav>
     </header>
 
     <main class="main">
-      <!-- KASIR -->
       <section id="view-kasir" class="view">
         <div class="toolbar">
           <input id="search" class="search" placeholder="Cari menu…" autocomplete="off" />
@@ -38,20 +38,13 @@
 
         <div class="bottom">
           <div class="summary">
-            <div class="sum-line">
-              <span>Item</span>
-              <strong id="sum-items">0</strong>
-            </div>
-            <div class="sum-line">
-              <span>Sub total</span>
-              <strong id="sum-total">Rp 0</strong>
-            </div>
+            <div class="sum-line"><span>Item</span><strong id="sum-items">0</strong></div>
+            <div class="sum-line"><span>Sub total</span><strong id="sum-total">Rp 0</strong></div>
           </div>
           <button id="btn-checkout" class="btn primary" disabled>Checkout</button>
         </div>
       </section>
 
-      <!-- RIWAYAT -->
       <section id="view-riwayat" class="view hidden">
         <div class="toolbar">
           <div class="hint">Tap transaksi untuk lihat detail.</div>
@@ -66,9 +59,58 @@
 
         <div id="transactions" class="list" aria-live="polite"></div>
       </section>
+
+      <section id="view-game" class="view hidden">
+        <div class="toolbar">
+          <div class="hint">Teriak kata <strong>SAYANG</strong> 🔊</div>
+          <button id="btn-game-reset" class="btn">Reset Skor</button>
+        </div>
+
+        <div class="card game">
+          <div class="game-head">
+            <div>
+              <div class="game-title">Keras-kerasan “SAYANG”</div>
+              <div class="game-sub">Parameter naik sesuai suara kamu. Target: setinggi mungkin!</div>
+            </div>
+            <span class="badge" id="game-status">Belum mulai</span>
+          </div>
+
+          <div class="meter-wrap">
+            <div class="meter"><div id="meter-fill" class="meter-fill" style="width:0%"></div></div>
+            <div class="meter-meta">
+              <div><span class="small">dB</span> <strong id="db-now">-∞</strong></div>
+              <div><span class="small">Peak</span> <strong id="db-peak">-∞</strong></div>
+            </div>
+          </div>
+
+          <div class="game-row">
+            <button id="btn-game-start" class="btn primary">Mulai</button>
+            <button id="btn-game-stop" class="btn" disabled>Stop</button>
+            <button id="btn-manual-sayang" class="btn ghost" disabled title="Kalau deteksi kata tidak tersedia, tap ini setelah kamu bilang SAYANG">Aku udah bilang SAYANG</button>
+          </div>
+
+          <div class="game-info">
+            <div class="small">Catatan:</div>
+            <ul>
+              <li>Web harus lewat <strong>HTTPS</strong> biar mic bisa jalan (GitHub Pages aman).</li>
+              <li>Deteksi kata “SAYANG” pakai fitur browser. Kalau nggak support, pakai tombol manual.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="game-title">Skor Tertinggi</div>
+          <div class="small">Top 10 dari HP ini</div>
+          <div id="scores" class="list" style="margin-top:10px"></div>
+          <div id="scores-empty" class="empty hidden">
+            <div class="empty-icon">🏁</div>
+            <div class="empty-title">Belum ada skor</div>
+            <div class="empty-sub">Klik Mulai, lalu teriak “SAYANG”.</div>
+          </div>
+        </div>
+      </section>
     </main>
 
-    <!-- MODAL DETAIL -->
     <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div class="modal-backdrop" id="modal-close"></div>
       <div class="modal-card">
@@ -83,13 +125,11 @@
       </div>
     </div>
 
-    <!-- TOAST -->
     <div id="toast" class="toast hidden"></div>
   </div>
 
   <script src="app.js"></script>
   <script>
-    // Register service worker (offline after first load)
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').catch(() => {});

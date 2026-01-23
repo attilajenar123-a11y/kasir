@@ -87,4 +87,661 @@
 
     // Game
     btnGameReset: $("#btn-game-reset"),
-    bt
+    btnGameStart: $("#btn-game-start"),
+    btnGameStop: $("#btn-game-stop"),
+    btnManualSayang: $("#btn-manual-sayang"),
+    gameStatus: $("#game-status"),
+    meterFill: $("#meter-fill"),
+    dbNow: $("#db-now"),
+    dbPeak: $("#db-peak"),
+    scores: $("#scores"),
+    scoresEmpty: $("#scores-empty"),
+  };
+
+  // -----------------------------
+  // State
+  // -----------------------------
+  let products = storage.get(K_PRODUCTS, null);
+  let cart = storage.get(K_CART, {}); // { productId: qty }
+  let transactions = storage.get(K_TX, []); // [{id, at, items, total}]
+  let scores = storage.get(K_SCORES, []); // [{at, peakDb}]
+
+  let activeTab = "kasir";
+
+  // Game audio state
+  let audioCtx = null;
+  let analyser = null;
+  let micStream = null;
+  let rafId = null;
+  let dbPeak = -Infinity;
+  let captureWindow = null; // {endAtMs, bestDb}
+  let recognition = null;
+  let recognitionSupported = false;
+
+  // -----------------------------
+  // Default products
+  // -----------------------------
+  function ensureDefaultProducts() {
+    if (Array.isArray(products) && products.length) return;
+
+    products = [
+      { id: "p1", name: "Nasi Kepal Ayam Suwir", price: null },
+      { id: "p2", name: "Nasi Kepal Ayam Geprek", price: null },
+      { id: "p3", name: "Indomie", price: null },
+      { id: "p4", name: "Magic Water", price: null },
+      { id: "p5", name: "Stiker ITS", price: null },
+    ];
+
+    storage.set(K_PRODUCTS, products);
+  }
+
+  // -----------------------------
+  // Toast
+  // -----------------------------
+  let toastTimer = null;
+  function showToast(msg) {
+    if (!el.toast) return;
+    el.toast.textContent = msg;
+    el.toast.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.toast.classList.add("hidden"), 1800);
+  }
+
+  // -----------------------------
+  // Tabs + Views
+  // -----------------------------
+  function setActiveTab(tab) {
+    activeTab = tab;
+
+    // toggle views
+    el.viewKasir.classList.toggle("hidden", tab !== "kasir");
+    el.viewRiwayat.classList.toggle("hidden", tab !== "riwayat");
+    el.viewGame.classList.toggle("hidden", tab !== "game");
+
+    // toggle active button style
+    const map = { kasir: el.tabKasir, riwayat: el.tabRiwayat, game: el.tabGame };
+    Object.entries(map).forEach(([k, btn]) => {
+      if (!btn) return;
+      btn.classList.toggle("active", k === tab);
+      btn.setAttribute("aria-selected", k === tab ? "true" : "false");
+    });
+  }
+
+  function bindTabs() {
+    // Event delegation: kebal walau DOM berubah / binding gagal
+    el.tabs?.addEventListener("click", (e) => {
+      const btn = e.target.closest("button.tab");
+      if (!btn) return;
+
+      if (btn.id === "tab-kasir") setActiveTab("kasir");
+      if (btn.id === "tab-riwayat") {
+        setActiveTab("riwayat");
+        renderTransactions();
+      }
+      if (btn.id === "tab-game") {
+        setActiveTab("game");
+        renderScores();
+      }
+    });
+  }
+
+  // -----------------------------
+  // Products / Cart
+  // -----------------------------
+  function getProductById(id) {
+    return products.find((p) => p.id === id);
+  }
+
+  function setPrice(productId) {
+    const p = getProductById(productId);
+    if (!p) return;
+
+    const current = p.price == null ? "" : String(p.price);
+    const input = prompt(`Masukin harga untuk "${p.name}" (angka aja).`, current);
+    if (input == null) return;
+
+    const clean = input.replace(/[^\d]/g, "");
+    if (!clean) {
+      p.price = null;
+    } else {
+      p.price = Number(clean);
+    }
+    storage.set(K_PRODUCTS, products);
+    renderProducts();
+    renderSummary();
+  }
+
+  function incCart(productId, by = 1) {
+    const q = Number(cart[productId] || 0) + by;
+    cart[productId] = Math.max(0, q);
+    if (cart[productId] === 0) delete cart[productId];
+    storage.set(K_CART, cart);
+    renderProducts();  // supaya qty update
+    renderSummary();
+  }
+
+  function cartTotals() {
+    let items = 0;
+    let total = 0;
+    for (const [pid, qty] of Object.entries(cart)) {
+      const p = getProductById(pid);
+      if (!p) continue;
+      items += qty;
+      const price = Number(p.price || 0);
+      total += price * qty;
+    }
+    return { items, total };
+  }
+
+  function renderSummary() {
+    const { items, total } = cartTotals();
+    el.sumItems.textContent = String(items);
+    el.sumTotal.textContent = fmtIDR(total);
+    el.btnCheckout.disabled = items === 0;
+  }
+
+  function renderProducts() {
+    const q = (el.search?.value || "").trim().toLowerCase();
+    const filtered = products.filter((p) => p.name.toLowerCase().includes(q));
+
+    el.products.innerHTML = "";
+    for (const p of filtered) {
+      const qty = Number(cart[p.id] || 0);
+
+      const card = document.createElement("div");
+      card.className = "card";
+
+      const priceText = p.price == null ? "Harga: (belum diisi)" : `Harga: ${fmtIDR(p.price)}`;
+
+      card.innerHTML = `
+        <div class="name">${escapeHTML(p.name)}</div>
+        <div class="price">
+          <span>${escapeHTML(priceText)}</span>
+          <span class="badge" data-action="edit-price" data-id="${p.id}">Tap harga buat edit</span>
+        </div>
+        <div class="qtybar">
+          <div class="qty">
+            <button class="qbtn" data-action="dec" data-id="${p.id}" aria-label="Kurangi">−</button>
+            <div class="qval" aria-label="Jumlah">${qty}</div>
+            <button class="qbtn" data-action="inc" data-id="${p.id}" aria-label="Tambah">+</button>
+          </div>
+          <button class="btn" data-action="add" data-id="${p.id}">Tambah</button>
+        </div>
+      `;
+
+      el.products.appendChild(card);
+    }
+  }
+
+  function bindProductsClicks() {
+    el.products.addEventListener("click", (e) => {
+      const a = e.target.closest("[data-action]");
+      if (!a) return;
+      const action = a.getAttribute("data-action");
+      const id = a.getAttribute("data-id");
+
+      if (action === "edit-price") setPrice(id);
+      if (action === "dec") incCart(id, -1);
+      if (action === "inc") incCart(id, +1);
+      if (action === "add") incCart(id, +1);
+    });
+  }
+
+  function bindSearch() {
+    el.search?.addEventListener("input", () => renderProducts());
+  }
+
+  // -----------------------------
+  // Checkout + Transactions
+  // -----------------------------
+  function checkout() {
+    // Validasi: harga harus ada kalau qty > 0
+    for (const [pid, qty] of Object.entries(cart)) {
+      if (qty <= 0) continue;
+      const p = getProductById(pid);
+      if (!p) continue;
+      if (p.price == null) {
+        alert(`Harga "${p.name}" belum diisi. Tap harga dulu ya.`);
+        return;
+      }
+    }
+
+    const items = [];
+    let total = 0;
+
+    for (const [pid, qty] of Object.entries(cart)) {
+      const p = getProductById(pid);
+      if (!p) continue;
+      const price = Number(p.price || 0);
+      const sub = price * qty;
+      total += sub;
+      items.push({ id: pid, name: p.name, qty, price, subtotal: sub });
+    }
+
+    const tx = {
+      id: `TX-${uid()}`,
+      at: nowISO(),
+      items,
+      total
+    };
+
+    transactions.unshift(tx);
+    storage.set(K_TX, transactions);
+
+    cart = {};
+    storage.set(K_CART, cart);
+
+    renderProducts();
+    renderSummary();
+    renderTransactions();
+    showToast("Checkout sukses ✅");
+    setActiveTab("riwayat");
+  }
+
+  function renderTransactions() {
+    el.transactions.innerHTML = "";
+
+    if (!transactions.length) {
+      el.txEmpty.classList.remove("hidden");
+      return;
+    }
+    el.txEmpty.classList.add("hidden");
+
+    for (const tx of transactions) {
+      const div = document.createElement("div");
+      div.className = "tx";
+      div.setAttribute("data-txid", tx.id);
+
+      const itemCount = tx.items.reduce((a, it) => a + (it.qty || 0), 0);
+
+      div.innerHTML = `
+        <div class="top">
+          <div>
+            <div class="id">${escapeHTML(tx.id)}</div>
+            <div class="meta">${escapeHTML(toLocalTime(tx.at))} • ${itemCount} item</div>
+          </div>
+          <div class="total">${escapeHTML(fmtIDR(tx.total))}</div>
+        </div>
+      `;
+
+      el.transactions.appendChild(div);
+    }
+  }
+
+  function openTxModal(txId) {
+    const tx = transactions.find((t) => t.id === txId);
+    if (!tx) return;
+
+    el.modalTitle.textContent = "Detail Transaksi";
+    el.modalSub.textContent = `${tx.id} • ${toLocalTime(tx.at)}`;
+
+    const rows = tx.items.map((it) => {
+      return `
+        <div class="row">
+          <div>
+            <div><strong>${escapeHTML(it.name)}</strong></div>
+            <div class="small">${it.qty} x ${escapeHTML(fmtIDR(it.price))}</div>
+          </div>
+          <div><strong>${escapeHTML(fmtIDR(it.subtotal))}</strong></div>
+        </div>
+      `;
+    }).join("");
+
+    el.modalBody.innerHTML = `
+      ${rows}
+      <div class="row">
+        <div><strong>Total</strong></div>
+        <div><strong>${escapeHTML(fmtIDR(tx.total))}</strong></div>
+      </div>
+    `;
+
+    el.modal.classList.remove("hidden");
+  }
+
+  function closeModal() {
+    el.modal.classList.add("hidden");
+  }
+
+  function bindTransactionsClicks() {
+    el.transactions.addEventListener("click", (e) => {
+      const box = e.target.closest(".tx");
+      if (!box) return;
+      openTxModal(box.getAttribute("data-txid"));
+    });
+  }
+
+  function exportJSON() {
+    const payload = {
+      exportedAt: nowISO(),
+      products,
+      transactions,
+      scores
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `kasir-export-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function resetAll() {
+    const ok = confirm("Reset semua data? (produk, keranjang, riwayat, skor). Ini nggak bisa dibalikin.");
+    if (!ok) return;
+
+    storage.del(K_PRODUCTS);
+    storage.del(K_CART);
+    storage.del(K_TX);
+    storage.del(K_SCORES);
+
+    products = null;
+    cart = {};
+    transactions = [];
+    scores = [];
+
+    ensureDefaultProducts();
+    renderProducts();
+    renderSummary();
+    renderTransactions();
+    renderScores();
+    showToast("Data direset ✅");
+    setActiveTab("kasir");
+  }
+
+  // -----------------------------
+  // GAME: audio meter + SAYANG
+  // -----------------------------
+  function setGameStatus(t) {
+    el.gameStatus.textContent = t;
+  }
+
+  function setDbUI(dbNowVal) {
+    // dbNowVal bisa -Infinity kalau belum ada data
+    const showNow = (dbNowVal === -Infinity) ? "-∞" : dbNowVal.toFixed(1);
+    el.dbNow.textContent = showNow;
+
+    const showPeak = (dbPeak === -Infinity) ? "-∞" : dbPeak.toFixed(1);
+    el.dbPeak.textContent = showPeak;
+
+    // meter normalization (range -60..0 dB)
+    const minDb = -60;
+    const maxDb = 0;
+    const clamped = Math.max(minDb, Math.min(maxDb, dbNowVal));
+    const pct = dbNowVal === -Infinity ? 0 : ((clamped - minDb) / (maxDb - minDb)) * 100;
+    el.meterFill.style.width = `${pct}%`;
+  }
+
+  async function startGame() {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      alert("Mic ditolak / nggak tersedia. Coba allow microphone ya.");
+      return;
+    }
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = audioCtx.createMediaStreamSource(micStream);
+
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+
+    src.connect(analyser);
+
+    dbPeak = -Infinity;
+    captureWindow = null;
+
+    el.btnGameStart.disabled = true;
+    el.btnGameStop.disabled = false;
+
+    // Speech recognition support
+    recognitionSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    el.btnManualSayang.disabled = false; // manual selalu boleh pas game jalan
+
+    if (recognitionSupported) {
+      try {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SR();
+        recognition.lang = "id-ID";
+        recognition.continuous = true;
+        recognition.interimResults = true;
+
+        recognition.onresult = (event) => {
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const res = event.results[i];
+            const text = (res[0]?.transcript || "").toLowerCase();
+            if (text.includes("sayang")) {
+              // start capture window 2 sec
+              triggerCaptureWindow();
+              setGameStatus("Kata ‘SAYANG’ terdeteksi ✅ (ambil peak 2 detik)");
+              break;
+            }
+          }
+        };
+
+        recognition.onerror = () => {
+          // fallback: manual
+          setGameStatus("Deteksi kata error. Pakai tombol manual.");
+        };
+
+        recognition.start();
+        setGameStatus("Mic aktif + deteksi kata aktif 🎤");
+      } catch {
+        recognition = null;
+        setGameStatus("Mic aktif. Deteksi kata tidak tersedia, pakai tombol manual.");
+      }
+    } else {
+      setGameStatus("Mic aktif. Browser kamu belum support deteksi kata, pakai tombol manual.");
+    }
+
+    loopMeter();
+  }
+
+  function stopGame() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+
+    if (recognition) {
+      try { recognition.stop(); } catch {}
+      recognition = null;
+    }
+
+    if (micStream) {
+      micStream.getTracks().forEach((t) => t.stop());
+      micStream = null;
+    }
+
+    if (audioCtx) {
+      try { audioCtx.close(); } catch {}
+      audioCtx = null;
+    }
+
+    analyser = null;
+    captureWindow = null;
+
+    el.btnGameStart.disabled = false;
+    el.btnGameStop.disabled = true;
+    el.btnManualSayang.disabled = true;
+
+    setGameStatus("Berhenti");
+    setDbUI(-Infinity);
+  }
+
+  function triggerCaptureWindow() {
+    captureWindow = {
+      endAtMs: Date.now() + 2000,
+      bestDb: -Infinity,
+      committed: false
+    };
+  }
+
+  function commitScore(peakDbVal) {
+    // simpan score
+    scores.unshift({ at: nowISO(), peakDb: peakDbVal });
+    // sort desc
+    scores.sort((a, b) => (b.peakDb || -Infinity) - (a.peakDb || -Infinity));
+    scores = scores.slice(0, 10);
+
+    storage.set(K_SCORES, scores);
+    renderScores();
+
+    showToast("Skor tersimpan 🏁");
+  }
+
+  function loopMeter() {
+    if (!analyser) return;
+
+    const buf = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(buf);
+
+    // RMS
+    let sumSq = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128; // -1..1
+      sumSq += v * v;
+    }
+    const rms = Math.sqrt(sumSq / buf.length);
+
+    // dB estimate
+    let dbNowVal = -Infinity;
+    if (rms > 0.00001) {
+      dbNowVal = 20 * Math.log10(rms);
+      // dbNowVal akan negatif; makin mendekati 0 = makin kenceng
+    }
+
+    if (dbNowVal !== -Infinity) {
+      dbPeak = Math.max(dbPeak, dbNowVal);
+    }
+
+    // capture window
+    if (captureWindow && !captureWindow.committed) {
+      captureWindow.bestDb = Math.max(captureWindow.bestDb, dbNowVal);
+
+      if (Date.now() >= captureWindow.endAtMs) {
+        captureWindow.committed = true;
+        // simpan score dari bestDb (kalau -Infinity berarti ga kedeteksi)
+        if (captureWindow.bestDb === -Infinity) {
+          setGameStatus("Nggak kebaca suaranya. Coba lebih kenceng / mic allow.");
+        } else {
+          setGameStatus("Skor masuk ✅");
+          commitScore(captureWindow.bestDb);
+        }
+      }
+    }
+
+    setDbUI(dbNowVal);
+    rafId = requestAnimationFrame(loopMeter);
+  }
+
+  function resetScores() {
+    const ok = confirm("Reset skor game?");
+    if (!ok) return;
+    scores = [];
+    storage.set(K_SCORES, scores);
+    renderScores();
+    showToast("Skor direset ✅");
+  }
+
+  function renderScores() {
+    el.scores.innerHTML = "";
+    if (!scores.length) {
+      el.scoresEmpty.classList.remove("hidden");
+      return;
+    }
+    el.scoresEmpty.classList.add("hidden");
+
+    scores.forEach((s, idx) => {
+      const item = document.createElement("div");
+      item.className = "tx";
+      item.innerHTML = `
+        <div class="top">
+          <div>
+            <div class="id">#${idx + 1} • ${(s.peakDb ?? -Infinity) === -Infinity ? "-∞" : s.peakDb.toFixed(1)} dB</div>
+            <div class="meta">${escapeHTML(toLocalTime(s.at))}</div>
+          </div>
+          <div class="total">🏁</div>
+        </div>
+      `;
+      el.scores.appendChild(item);
+    });
+  }
+
+  // -----------------------------
+  // Bindings
+  // -----------------------------
+  function bindButtons() {
+    el.btnCheckout.addEventListener("click", checkout);
+    el.btnReset.addEventListener("click", resetAll);
+    el.btnExport.addEventListener("click", exportJSON);
+
+    el.modalCloseBackdrop.addEventListener("click", closeModal);
+    el.modalX.addEventListener("click", closeModal);
+
+    // Game
+    el.btnGameStart.addEventListener("click", startGame);
+    el.btnGameStop.addEventListener("click", stopGame);
+    el.btnGameReset.addEventListener("click", resetScores);
+
+    el.btnManualSayang.addEventListener("click", () => {
+      if (!micStream) return;
+      triggerCaptureWindow();
+      setGameStatus("Manual: ambil peak 2 detik…");
+    });
+
+    // prevent “modal nyangkut”
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeModal();
+    });
+  }
+
+  // -----------------------------
+  // Safety: escape HTML
+  // -----------------------------
+  function escapeHTML(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  // -----------------------------
+  // Init
+  // -----------------------------
+  function init() {
+    // Pastikan modal benar2 hidden di awal
+    el.modal.classList.add("hidden");
+
+    ensureDefaultProducts();
+
+    // Load persisted
+    products = storage.get(K_PRODUCTS, products);
+    cart = storage.get(K_CART, cart);
+    transactions = storage.get(K_TX, transactions);
+    scores = storage.get(K_SCORES, scores);
+
+    bindTabs();
+    bindSearch();
+    bindProductsClicks();
+    bindTransactionsClicks();
+    bindButtons();
+
+    renderProducts();
+    renderSummary();
+    renderTransactions();
+    renderScores();
+
+    setActiveTab("kasir");
+
+    // Guard: kalau user pindah tab game terus reload, tetap aman
+    setGameStatus("Belum mulai");
+    setDbUI(-Infinity);
+    el.btnGameStop.disabled = true;
+    el.btnManualSayang.disabled = true;
+  }
+
+  init();
+})();
